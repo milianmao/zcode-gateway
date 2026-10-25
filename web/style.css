@@ -364,6 +364,7 @@ textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height:
 .quota-summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; }
 .quota-summary-bar { height: 10px; margin-bottom: 14px; }
 .quota-summary-list { display: flex; flex-direction: column; gap: 8px; }
-.quota-summary-row { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 2.2fr) auto; gap: 12px; align-items: center; font-size: 12px; }
+.quota-summary-row { display: grid; grid-template-columns: minmax(130px, 0.9fr) minmax(0, 2fr) auto; gap: 12px; align-items: center; font-size: 12px; }
 .quota-summary-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quota-summary-num { font-variant-numeric: tabular-nums; color: var(--text-2); white-space: nowrap; }
+.quota-summary-list .bar { height: 8px; }

@@ -240,67 +240,76 @@ function renderAccounts() {
 
 function renderQuotaSummary() {
   const accounts = (state.accounts || []).filter((account) => account.enabled !== false);
-  let granted = 0;
-  let used = 0;
-  let remaining = 0;
+  const byModel = new Map();
   let counted = 0;
   let apiSourced = 0;
   let latest = 0;
-  const rows = [];
   accounts.forEach((account) => {
     const quota = account.quota || {};
-    const g = Number(quota.granted) || 0;
-    const u = Number(quota.used) || 0;
-    if (g <= 0 && u <= 0) return;
-    const r = Number(quota.remaining) || 0;
-    granted += g;
-    used += u;
-    remaining += r;
+    const models = Array.isArray(quota.models) ? quota.models : [];
+    if (models.length === 0) return;
     counted += 1;
     if (quota.source === 'api') apiSourced += 1;
     if (Number(quota.updatedAt) > latest) latest = Number(quota.updatedAt);
-    const percent = g > 0 ? Math.max(0, Math.min(100, (r / g) * 100)) : 0;
-    rows.push({ label: account.label || account.id, granted: g, used: u, remaining: r, percent, source: quota.source });
+    models.forEach((model) => {
+      const key = String(model.name || '').trim().toLowerCase();
+      if (!key) return;
+      const entry = byModel.get(key) || { name: model.name || key, granted: 0, used: 0, remaining: 0, accounts: 0 };
+      entry.granted += Number(model.granted) || 0;
+      entry.used += Number(model.used) || 0;
+      entry.remaining += Number(model.remaining) || 0;
+      entry.accounts += 1;
+      byModel.set(key, entry);
+    });
   });
+  const rows = [...byModel.values()].map((row) => ({
+    ...row,
+    percent: row.granted > 0 ? Math.max(0, Math.min(100, (row.remaining / row.granted) * 100)) : 0,
+  }));
+  rows.sort((a, b) => a.remaining - b.remaining);
 
+  let granted = 0;
+  let used = 0;
+  let remaining = 0;
+  rows.forEach((row) => {
+    granted += row.granted;
+    used += row.used;
+    remaining += row.remaining;
+  });
   const percentRemaining = granted > 0 ? (remaining / granted) * 100 : 0;
   const percentUsed = granted > 0 ? (used / granted) * 100 : 0;
 
   const remainingEl = $('quota-remaining');
-  if (remainingEl) {
-    remainingEl.textContent = units(remaining);
-    remainingEl.title = `${numberFmt.format(remaining)} tokens`;
-    $('quota-remaining-foot').textContent = `占总额度 ${percentRemaining.toFixed(1)}%`;
-    $('quota-used').textContent = units(used);
-    $('quota-used').title = `${numberFmt.format(used)} tokens`;
-    $('quota-used-foot').textContent = `占总额度 ${percentUsed.toFixed(1)}%`;
-    $('quota-granted').textContent = units(granted);
-    $('quota-granted').title = `${numberFmt.format(granted)} tokens`;
-    $('quota-granted-foot').textContent = `${counted} 个启用账号`;
-    const meta = $('quota-summary-meta');
-    if (counted === 0) {
-      meta.textContent = '还没有额度数据，等待上游刷新…';
-    } else {
-      const stamp = latest > 0 ? timeText(latest) : '—';
-      meta.textContent = `${apiSourced > 0 ? '上游实时额度' : '本地统计额度'} · 更新于 ${stamp}`;
-    }
-    const bar = $('quota-summary-bar');
-    if (bar) {
-      bar.className = `bar quota-summary-bar ${barClass(percentRemaining)}`;
-      $('quota-summary-bar-fill').style.width = `${Math.max(0, Math.min(100, percentRemaining)).toFixed(1)}%`;
-    }
-    const list = $('quota-summary-list');
-    if (list) {
-      list.innerHTML = rows.length
-        ? rows.map((row) => `<div class="quota-summary-row">
-          <span class="quota-summary-name" title="${esc(row.label)}">${esc(row.label)}</span>
-          <span class="bar ${barClass(row.percent)}"><span style="width:${row.percent.toFixed(1)}%"></span></span>
-          <span class="quota-summary-num" title="剩余 ${numberFmt.format(row.remaining)} · 已用 ${numberFmt.format(row.used)} · 总额度 ${numberFmt.format(row.granted)}">剩 ${units(row.remaining)} · 已用 ${units(row.used)}</span>
-        </div>`).join('')
-        : '<div class="empty small">还没有账号额度，稍后自动刷新。</div>';
-    }
+  if (!remainingEl) return;
+  remainingEl.textContent = units(remaining);
+  remainingEl.title = `${numberFmt.format(remaining)} tokens 可用`;
+  $('quota-remaining-foot').textContent = `占总额度 ${percentRemaining.toFixed(1)}%`;
+  $('quota-used').textContent = units(used);
+  $('quota-used').title = `${numberFmt.format(used)} tokens 已用`;
+  $('quota-used-foot').textContent = `占总额度 ${percentUsed.toFixed(1)}%`;
+  $('quota-granted').textContent = units(granted);
+  $('quota-granted').title = `${numberFmt.format(granted)} tokens 总额度`;
+  $('quota-granted-foot').textContent = `${rows.length} 个模型 · ${counted} 个账号`;
+  const meta = $('quota-summary-meta');
+  if (rows.length === 0) {
+    meta.textContent = '还没有额度数据，等待上游刷新…';
+  } else {
+    meta.textContent = `${apiSourced > 0 ? '上游实时额度' : '本地统计额度'} · 更新于 ${latest > 0 ? timeText(latest) : '—'}`;
   }
-  return { granted, used, remaining, counted };
+  const bar = $('quota-summary-bar');
+  if (bar) {
+    bar.className = `bar quota-summary-bar ${barClass(percentRemaining)}`;
+    $('quota-summary-bar-fill').style.width = `${Math.max(0, Math.min(100, percentRemaining)).toFixed(1)}%`;
+  }
+  const list = $('quota-summary-list');
+  if (!list) return;
+  list.innerHTML = rows.length
+    ? rows.map((row) => `<div class="quota-summary-row">
+        <span class="quota-summary-name" title="${esc(row.name)}">${esc(row.name)}</span>
+        <span class="bar ${barClass(row.percent)}" title="可用占比 ${row.percent.toFixed(1)}%"><span style="width:${row.percent.toFixed(1)}%"></span></span>
+        <span class="quota-summary-num" title="可用 ${numberFmt.format(row.remaining)} · 已用 ${numberFmt.format(row.used)} · 总额度 ${numberFmt.format(row.granted)}（${row.accounts} 个账号）">可用 ${units(row.remaining)} · 已用 ${units(row.used)}</span>
+      </div>`).join('')
+    : '<div class="empty small">还没有账号额度，稍后自动刷新。</div>';
 }
 
 function accountRow(account, index) {
