@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tls_client "github.com/bogdanfinn/tls-client"
@@ -17,9 +18,14 @@ import (
 )
 
 type Upstream struct {
-	client   tls_client.HttpClient
-	proxyURL string
+	mu            sync.RWMutex
+	defaultClient tls_client.HttpClient
+	defaultProxy  string
+	clients       map[string]tls_client.HttpClient
 }
+
+// directKey 是「强制直连」在 client 缓存里的键名
+const directKey = "direct"
 
 func normalizeProxyURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
@@ -55,12 +61,7 @@ func proxyDisplay(raw string) string {
 	return u.String()
 }
 
-func NewUpstream() (*Upstream, error) {
-	proxy := envOr("ZCODE_PROXY_URL", envOr("ZCODE_PROXY", ""))
-	proxyURL, err := normalizeProxyURL(proxy)
-	if err != nil {
-		return nil, err
-	}
+func newUpstreamClient(proxyURL string) (tls_client.HttpClient, error) {
 	options := []tls_client.HttpClientOption{
 		tls_client.WithClientProfile(profiles.Chrome_131),
 		tls_client.WithTimeoutSeconds(300),
@@ -68,19 +69,137 @@ func NewUpstream() (*Upstream, error) {
 	if proxyURL != "" {
 		options = append(options, tls_client.WithProxyUrl(proxyURL))
 	}
-	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
-	if err != nil {
+	return tls_client.NewHttpClient(tls_client.NewNoopLogger(), options...)
+}
+
+func isDirectValue(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	return raw == "" || strings.EqualFold(raw, directKey) || strings.EqualFold(raw, "none")
+}
+
+func NewUpstream() (*Upstream, error) {
+	u := &Upstream{clients: map[string]tls_client.HttpClient{}}
+	if err := u.SetDefault(envOr("ZCODE_PROXY_URL", envOr("ZCODE_PROXY", ""))); err != nil {
 		return nil, err
 	}
-	return &Upstream{client: client, proxyURL: proxyURL}, nil
+	return u, nil
+}
+
+// SetDefault 热切换全局出口代理（空 / direct = 直连）。校验或建连失败时保留原出口不生效。
+func (u *Upstream) SetDefault(raw string) error {
+	proxyURL := ""
+	if !isDirectValue(raw) {
+		normalized, err := normalizeProxyURL(raw)
+		if err != nil {
+			return err
+		}
+		proxyURL = normalized
+	}
+	client, err := newUpstreamClient(proxyURL)
+	if err != nil {
+		return err
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.clients == nil {
+		u.clients = map[string]tls_client.HttpClient{}
+	}
+	key := proxyURL
+	if key == "" {
+		key = directKey
+	}
+	u.clients[key] = client
+	u.defaultClient = client
+	u.defaultProxy = proxyURL
+	return nil
 }
 
 func (u *Upstream) ProxyURL() string {
-	return u.proxyURL
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.defaultProxy
+}
+
+// clientFor 取指定出口的 client（缓存复用）；raw 为空时用全局默认出口，direct/force-direct 强制直连。
+func (u *Upstream) clientFor(raw string) (tls_client.HttpClient, string, error) {
+	forceDirect := strings.EqualFold(strings.TrimSpace(raw), directKey) || strings.EqualFold(strings.TrimSpace(raw), "force-direct")
+	key := ""
+	if forceDirect {
+		key = directKey
+	} else {
+		proxyURL, err := normalizeProxyURL(raw)
+		if err != nil {
+			return nil, "", err
+		}
+		key = proxyURL
+		if key == "" {
+			u.mu.RLock()
+			client := u.defaultClient
+			u.mu.RUnlock()
+			if client != nil {
+				return client, "", nil
+			}
+			key = directKey
+		}
+	}
+	u.mu.RLock()
+	cached := u.clients[key]
+	u.mu.RUnlock()
+	if cached != nil {
+		return cached, key, nil
+	}
+	buildProxy := key
+	if forceDirect {
+		buildProxy = ""
+	}
+	client, err := newUpstreamClient(buildProxy)
+	if err != nil {
+		return nil, key, err
+	}
+	u.mu.Lock()
+	if u.clients == nil {
+		u.clients = map[string]tls_client.HttpClient{}
+	}
+	u.clients[key] = client
+	u.mu.Unlock()
+	return client, key, nil
+}
+
+// DoerFor 返回走指定出口的 HTTPDoer；留空 = 全局默认出口。
+func (u *Upstream) DoerFor(raw string) HTTPDoer {
+	if strings.TrimSpace(raw) == "" {
+		return u
+	}
+	return proxyDoer{upstream: u, proxy: strings.TrimSpace(raw)}
+}
+
+type proxyDoer struct {
+	upstream *Upstream
+	proxy    string
+}
+
+func (d proxyDoer) Do(req *fhttp.Request) (*fhttp.Response, error) {
+	return d.upstream.DoFor(d.proxy, req)
 }
 
 func (u *Upstream) Do(req *fhttp.Request) (*fhttp.Response, error) {
-	return u.client.Do(req)
+	return u.DoFor("", req)
+}
+
+func (u *Upstream) DoFor(raw string, req *fhttp.Request) (*fhttp.Response, error) {
+	client, _, err := u.clientFor(raw)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
+}
+
+// doerFor 按账号取出口：账号自己有出口就用账号的，否则走全局默认。
+func (s *Server) doerFor(acc *Account) HTTPDoer {
+	if acc != nil && strings.TrimSpace(acc.ProxyURL) != "" {
+		return s.upstream.DoerFor(acc.ProxyURL)
+	}
+	return s.upstream
 }
 
 func (s *Server) ensureProjectToken(ctx context.Context, acc *Account) (string, error) {
@@ -90,7 +209,7 @@ func (s *Server) ensureProjectToken(ctx context.Context, acc *Account) (string, 
 	if acc.ProjectToken != "" && acc.ProjectTokenExp > time.Now().Unix()+120 {
 		return acc.ProjectToken, nil
 	}
-	token, expires, err := mintProjectToken(ctx, s.upstream, acc)
+	token, expires, err := mintProjectToken(ctx, s.doerFor(acc), acc)
 	if err != nil {
 		return "", err
 	}
@@ -211,7 +330,7 @@ func (s *Server) Forward(ctx context.Context, acc *Account, body map[string]any,
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := s.upstream.Do(req)
+	resp, err := s.doerFor(acc).Do(req)
 	if err != nil {
 		return nil, nil, err
 	}

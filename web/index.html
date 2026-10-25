@@ -125,7 +125,7 @@
       <div class="card">
         <div class="table-wrap">
           <table class="table accounts-table" id="accounts-table">
-            <thead><tr><th class="w-priority">优先级</th><th>账号</th><th>模式</th><th>状态</th><th>额度</th><th>今日 Tokens</th><th>总 Tokens</th><th>请求 / 成功率</th><th>并发</th><th>最后使用</th><th class="w-actions">操作</th></tr></thead>
+            <thead><tr><th class="w-priority">优先级</th><th>账号</th><th>模式</th><th>状态</th><th>额度</th><th>今日 Tokens</th><th>总 Tokens</th><th>请求 / 成功率</th><th>并发</th><th>出口</th><th>最后使用</th><th class="w-actions">操作</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -219,6 +219,15 @@
             <input class="input" id="setting-quota" type="number" min="10" max="300" step="5">
             <small>后台定时拉取套餐额度，页面每 30 秒读取一次。</small>
           </label>
+          <label class="field">
+            <span>出口代理（全局默认）</span>
+            <div class="token-row">
+              <input class="input mono" id="setting-proxy" placeholder="http://user:pass@host:port 或 socks5://host:1080，留空=直连" autocomplete="off" spellcheck="false">
+              <button class="btn" id="test-egress">测出口 IP</button>
+            </div>
+            <small>保存后立即生效（无需重启）：OAuth、额度、活动、消息请求都走这个出口；单个账号可在账号页单独覆盖，填 <code>direct</code> 强制直连。</small>
+          </label>
+          <div class="info-row"><span>当前出口</span><code id="setting-egress">-</code></div>
           <div class="info-row"><span>API Base</span><code id="setting-base">-</code></div>
           <div class="info-row"><span>版本</span><code id="setting-version">-</code></div>
           <div class="info-row"><span>数据目录</span><code id="setting-datadir">-</code></div>

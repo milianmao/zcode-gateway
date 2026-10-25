@@ -54,7 +54,7 @@ func (s *Server) refreshAllQuotas(ctx context.Context) {
 func (s *Server) refreshQuota(ctx context.Context, acc *Account) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	plan, err := fetchCurrentPlan(ctx, s.upstream, acc.ZcodeJWT, s.profileHeaders(acc))
+	plan, err := fetchCurrentPlan(ctx, s.doerFor(acc), acc.ZcodeJWT, s.profileHeaders(acc))
 	if err != nil {
 		s.store.UpdateAccount(acc.ID, func(a *Account) {
 			a.Quota.Error = err.Error()
@@ -222,7 +222,7 @@ func (s *Server) tryBalance(ctx context.Context, acc *Account, plan *PlanInfo) (
 	if plan != nil && plan.UserPlanID != "" {
 		query += "&user_plan_id=" + plan.UserPlanID
 	}
-	resp, err := doRequest(ctx, s.upstream, http.MethodGet, base+query, headers, nil)
+	resp, err := doRequest(ctx, s.doerFor(acc), http.MethodGet, base+query, headers, nil)
 	if err != nil {
 		return nil, err
 	}

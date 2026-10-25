@@ -308,6 +308,10 @@ function accountRow(account, index) {
         ${[1,2,3,4,5].map((v) => `<option value="${v}" ${Number(account.concurrency || 1) === v ? 'selected' : ''}>${v}</option>`).join('')}
       </select>
     </td>
+    <td>
+      <div class="muted-cell ellipsis" title="${esc(account.proxyUrl || '')}">${account.proxyUrl ? esc(proxyLabel(account.proxyUrl)) : '继承全局'}</div>
+      <button class="btn" data-action="egress" data-id="${esc(account.id)}">设置</button>
+    </td>
     <td class="muted-cell">${relative(today.lastUsed || account.lastUsedAt)}</td>
     <td class="actions">
       <button class="btn" data-action="up" data-id="${esc(account.id)}" ${index === 0 ? 'disabled' : ''}>↑</button>
@@ -667,6 +671,7 @@ async function loadSettings() {
     const data = await api('/api/settings');
     state.settings = data.settings;
     $('setting-token').value = data.settings.proxyToken || '';
+    $('setting-proxy').value = data.settings.proxyUrl || '';
     $('setting-bodies').checked = !!data.settings.storeBodies;
     $('setting-fingerprint').checked = !!data.settings.fingerprint;
     $('setting-prompt-mode').value = data.settings.promptMode || 'replace';
@@ -684,6 +689,7 @@ async function saveSettings() {
   try {
     const body = {
       proxyToken: $('setting-token').value.trim(),
+      proxyUrl: $('setting-proxy').value.trim(),
       storeBodies: $('setting-bodies').checked,
       fingerprint: $('setting-fingerprint').checked,
       promptMode: $('setting-prompt-mode').value,
@@ -864,6 +870,7 @@ document.addEventListener('click', (event) => {
     if (action.dataset.action === 'refresh') refreshAccount(id);
     if (action.dataset.action === 'activities') detectActivities(id);
     if (action.dataset.action === 'clear-cooldown') clearCooldown(id);
+    if (action.dataset.action === 'egress') editEgress(id);
     if (action.dataset.action === 'delete') deleteAccount(id);
   }
   const claim = event.target.closest('[data-claim-plan]');
@@ -890,6 +897,7 @@ $('open-auth-url').addEventListener('click', () => {
 });
 $('submit-callback').addEventListener('click', submitCallback);
 $('save-settings').addEventListener('click', saveSettings);
+$('test-egress').addEventListener('click', testEgress);
 $('activity-captcha-fetch').addEventListener('click', fetchCaptchaParam);
 $('generate-token').addEventListener('click', generateProxyToken);
 $('copy-token').addEventListener('click', () => copyText($('setting-token').value));
@@ -916,3 +924,46 @@ setInterval(() => {
   loadOverview();
   if (state.view === 'accounts') loadAccounts();
 }, 30000);
+function proxyLabel(raw) {
+  if (!raw) return '继承全局';
+  if (String(raw).toLowerCase() === 'direct') return '强制直连';
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}`;
+  } catch (_) {
+    return raw;
+  }
+}
+
+async function editEgress(id) {
+  const account = state.accounts.find((item) => item.id === id);
+  if (!account) return;
+  const input = window.prompt(
+    '该账号的出口代理（留空=继承全局默认；填 direct=强制直连）\n支持 http:// https:// socks5:// socks5h://，可带 user:pass@',
+    account.proxyUrl || '',
+  );
+  if (input === null) return;
+  try {
+    await api(`/api/accounts/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ proxyUrl: input.trim() }),
+    });
+    toast('出口已更新，下一个请求生效');
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+async function testEgress() {
+  const proxy = $('setting-proxy').value.trim();
+  $('setting-egress').textContent = '检测中…';
+  try {
+    const query = proxy ? `?proxy=${encodeURIComponent(proxy)}` : '';
+    const data = await api(`/api/egress${query}`);
+    $('setting-egress').textContent = data.ip ? `${data.ip} · ${data.effective}` : `失败：${data.error || '未知错误'}`;
+  } catch (error) {
+    $('setting-egress').textContent = `失败：${error.message}`;
+    toast(error.message, true);
+  }
+}

@@ -60,6 +60,7 @@ func (s *Server) summary(acc *Account) *AccountSummary {
 	return &AccountSummary{
 		ID: acc.ID, Label: acc.Label, Provider: acc.Provider, Mode: acc.Mode,
 		Priority: acc.Priority, Enabled: acc.Enabled, Status: status,
+		ProxyURL:    acc.ProxyURL,
 		Concurrency: clampConcurrency(acc.Concurrency),
 		User:        acc.User, Quota: acc.Quota, LastError: acc.LastError,
 		ExhaustedUntil: acc.ExhaustedUntil,
@@ -199,12 +200,33 @@ func (s *Server) handleAccountByID(w http.ResponseWriter, r *http.Request) {
 			Priority    *int    `json:"priority"`
 			Enabled     *bool   `json:"enabled"`
 			Concurrency *int    `json:"concurrency"`
+			ProxyURL    *string `json:"proxyUrl"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeError(w, 400, "invalid json")
 			return
 		}
+		if body.ProxyURL != nil {
+			raw := strings.TrimSpace(*body.ProxyURL)
+			if isDirectValue(raw) {
+				direct := ""
+				if strings.EqualFold(raw, directKey) || strings.EqualFold(raw, "none") {
+					direct = directKey
+				}
+				body.ProxyURL = &direct
+			} else {
+				normalized, perr := normalizeProxyURL(raw)
+				if perr != nil {
+					writeError(w, 400, perr.Error())
+					return
+				}
+				body.ProxyURL = &normalized
+			}
+		}
 		if !s.store.UpdateAccount(id, func(a *Account) {
+			if body.ProxyURL != nil {
+				a.ProxyURL = *body.ProxyURL
+			}
 			if body.Label != nil {
 				a.Label = strings.TrimSpace(*body.Label)
 			}
@@ -324,6 +346,7 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPatch:
 		var body struct {
 			ProxyToken       *string `json:"proxyToken"`
+			ProxyURL         *string `json:"proxyUrl"`
 			Fingerprint      *bool   `json:"fingerprint"`
 			StoreBodies      *bool   `json:"storeBodies"`
 			QuotaIntervalSec *int    `json:"quotaIntervalSec"`
@@ -334,7 +357,16 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "invalid json")
 			return
 		}
+		if body.ProxyURL != nil {
+			if err := s.upstream.SetDefault(*body.ProxyURL); err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+		}
 		s.store.UpdateSettings(func(st *Settings) {
+			if body.ProxyURL != nil {
+				st.ProxyURL = s.upstream.ProxyURL()
+			}
 			if body.ProxyToken != nil {
 				st.ProxyToken = strings.TrimSpace(*body.ProxyToken)
 			}
@@ -710,4 +742,97 @@ func clientIP(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// handleEgress 探测当前出口 IP：?account=<id> 用该账号的出口，?proxy=<url> 临时测某个代理。
+func (s *Server) handleEgress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, 405, "method not allowed")
+		return
+	}
+	accountID := strings.TrimSpace(r.URL.Query().Get("account"))
+	proxy := ""
+	inherited := false
+	if accountID != "" {
+		acc := s.store.GetAccount(accountID)
+		if acc == nil {
+			writeError(w, 404, "account not found")
+			return
+		}
+		proxy = strings.TrimSpace(acc.ProxyURL)
+		inherited = proxy == ""
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("proxy")); raw != "" {
+		if isDirectValue(raw) {
+			proxy = directKey
+		} else {
+			normalized, err := normalizeProxyURL(raw)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			proxy = normalized
+		}
+		inherited = false
+	}
+	effective := proxy
+	if effective == "" {
+		effective = s.upstream.ProxyURL()
+	}
+	if strings.EqualFold(effective, directKey) {
+		effective = ""
+	}
+	label := proxyDisplay(effective)
+	if label == "" {
+		label = "direct"
+	}
+	out := map[string]any{
+		"account":   accountID,
+		"proxy":     proxy,
+		"effective": label,
+		"inherited": inherited,
+	}
+	ip, err := s.probeEgressIP(r.Context(), proxy)
+	if err != nil {
+		out["error"] = err.Error()
+	} else {
+		out["ip"] = ip
+	}
+	writeJSON(w, 200, out)
+}
+
+func (s *Server) probeEgressIP(ctx context.Context, proxy string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	doer := s.upstream.DoerFor(proxy)
+	endpoints := []string{
+		"https://api.ipify.org",
+		"https://ipv4.icanhazip.com",
+		"https://ifconfig.me/ip",
+	}
+	var lastErr error
+	for _, endpoint := range endpoints {
+		resp, err := doRequest(ctx, doer, http.MethodGet, endpoint, map[string]string{
+			"User-Agent": "curl/8.5.0",
+			"Accept":     "*/*",
+		}, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		raw, readErr := readJSON(resp)
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
+		value := strings.TrimSpace(string(raw))
+		if value != "" && !strings.ContainsAny(value, "{< ") {
+			return value, nil
+		}
+		lastErr = fmt.Errorf("%s: HTTP %d %s", endpoint, resp.StatusCode, value)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("egress probe failed")
+	}
+	return "", lastErr
 }

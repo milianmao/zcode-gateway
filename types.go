@@ -98,6 +98,7 @@ type Account struct {
 	Label              string                  `json:"label"`
 	Provider           string                  `json:"provider"`
 	Mode               string                  `json:"mode"`
+	ProxyURL           string                  `json:"proxyUrl,omitempty"`
 	User               UserInfo                `json:"user"`
 	Project            *ProjectLocation        `json:"project,omitempty"`
 	Priority           int                     `json:"priority"`
@@ -171,6 +172,7 @@ type LogEntry struct {
 
 type Settings struct {
 	ProxyToken        string `json:"proxyToken"`
+	ProxyURL          string `json:"proxyUrl"`
 	Fingerprint       bool   `json:"fingerprint"`
 	FingerprintSet    bool   `json:"fingerprintSet,omitempty"`
 	PromptMode        string `json:"promptMode"`
@@ -225,6 +227,7 @@ type AccountSummary struct {
 	Label          string       `json:"label"`
 	Provider       string       `json:"provider"`
 	Mode           string       `json:"mode"`
+	ProxyURL       string       `json:"proxyUrl,omitempty"`
 	Priority       int          `json:"priority"`
 	Enabled        bool         `json:"enabled"`
 	Status         string       `json:"status"`
