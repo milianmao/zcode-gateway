@@ -36,12 +36,15 @@ func (s *Server) webHandler() http.Handler {
 		if !s.adminAuthed(r) {
 			// Only the login page and its minimal assets are reachable
 			// before authentication.
-			if path == "/login.js" || path == "/style.css" {
+			w.Header().Set("Cache-Control", "no-store")
+			if path == "/login.js" || path == "/style.css" || path == "/login.html" {
 				files.ServeHTTP(w, r)
 				return
 			}
-			w.Header().Set("Cache-Control", "no-store")
+			// 其他任何路径一律给登录页，绝不泄露面板 HTML/JS
 			r.URL.Path = "/login.html"
+			files.ServeHTTP(w, r)
+			return
 		}
 		if path == "/" || path == "/index.html" {
 			raw, err := webAssets.ReadFile("web/index.html")
