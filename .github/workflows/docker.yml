@@ -33,7 +33,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          go build -trimpath -ldflags "-s -w" -o dist/zcode-gateway .
+          go build -trimpath -ldflags "-s -w -X main.buildCommit=${GITHUB_SHA::8}" -o dist/zcode-gateway .
           ls -l dist/
 
       - name: Upload binary artifact
@@ -73,6 +73,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          build-args: |
+            BUILD_COMMIT=${{ github.sha }}
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
