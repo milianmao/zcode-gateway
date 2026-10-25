@@ -1,10 +1,13 @@
-# zcode-gateway (Go) —— 无 cgo 纯静态二进制，运行层不需要 Chromium
+# zcode-gateway (Go) —— 无 cgo 纯静态二进制，运行层不需要 Chromium/浏览器
+# 构建上下文 = 仓库根目录（GitHub Actions 里由 build-push-action 传 context: .）
 FROM golang:1.27-bookworm AS build
 WORKDIR /src
-COPY src/ ./
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
 ENV CGO_ENABLED=0 \
     GOFLAGS=-mod=mod
-RUN go build -trimpath -ldflags "-s -w" -o /out/zcode-gateway . && /out/zcode-gateway -h 2>/dev/null || true
+RUN go build -trimpath -ldflags "-s -w" -o /out/zcode-gateway .
 
 FROM debian:bookworm-slim
 RUN apt-get update \
